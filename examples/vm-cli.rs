@@ -138,12 +138,17 @@ fn main() {
     }
 
     // Install macos image if there is no image installed
-    let conf_req = install_macos_image(IMAGE_LOCATION);
-    let platform = VZMacPlatformConfiguration::load(
+    let platform = match VZMacPlatformConfiguration::load(
         AUXILIARY_STORAGE_URL,
         HARDWARE_MODEL_STORAGE_URL,
         MACHINE_IDENTIFIER_STORAGE_URL,
-    );
+    ) {
+        Ok(platform) => platform,
+        Err(_) => {
+            let conf_req = install_macos_image(IMAGE_LOCATION);
+            VZMacPlatformConfiguration::create(conf_req, AUXILIARY_STORAGE_URL, HARDWARE_MODEL_STORAGE_URL, MACHINE_IDENTIFIER_STORAGE_URL)
+        }
+    };
 
     let boot_loader = VZMacOSBootLoader::new();
     let file_handle_for_reading = NSFileHandle::file_handle_with_standard_input();

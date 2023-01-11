@@ -9,7 +9,7 @@ pub struct VZMacPlatformConfiguration(pub StrongPtr);
 
 impl VZMacPlatformConfiguration {
     /// Load a mac platform configuration from the data stored at the provided URLs
-    pub fn load(aux_storage_url: &str, hardware_model_url: &str, machine_identifier_url: &str) -> VZMacPlatformConfiguration {
+    pub fn load(aux_storage_url: &str, hardware_model_url: &str, machine_identifier_url: &str) -> Result<VZMacPlatformConfiguration, String> {
         let platform_conf: Id = unsafe { msg_send![class!(VZMacPlatformConfiguration), alloc] };
         let platform_conf: Id = unsafe { msg_send![platform_conf, init] };
 
@@ -24,18 +24,18 @@ impl VZMacPlatformConfiguration {
         let hardware_model_data: Id = unsafe { msg_send![class!(NSData), alloc] };
         let hardware_model_data: Id = unsafe { msg_send![hardware_model_data, initWithContentsOfURL:hardware_model_url] };
         if hardware_model_data == NIL {
-            panic!("Failed to retreive hardware model data");
+            return Err(String::from("Failed to retreive hardware model data"));
         }
 
         let hardware_model: Id = unsafe { msg_send![class!(VZMacHardwareModel), alloc] };
         let hardware_model: Id = unsafe { msg_send![hardware_model, initWithDataRepresentation:hardware_model_data] };
         if hardware_model == NIL {
-            panic!("Failed to create hardware model");
+            return Err(String::from("Failed to create hardware model"));
         }
 
         let supported: bool = unsafe { msg_send![hardware_model, isSupported] };
         if !supported {
-            panic!("Hardware model is not supported on this machine");
+            return Err(String::from("Hardware model is not supported on this machine"));
         }
         let _: () = unsafe { msg_send![platform_conf, setHardwareModel:hardware_model] };
 
@@ -44,18 +44,18 @@ impl VZMacPlatformConfiguration {
         let machine_identifier_data: Id = unsafe { msg_send![class!(NSData), alloc] };
         let machine_identifier_data: Id = unsafe { msg_send![machine_identifier_data, initWithContentsOfURL:machine_identifier_url] };
         if machine_identifier_data == NIL {
-            panic!("Failed to retreive machine identifier data");
+            return Err(String::from("Failed to retreive machine identifier data"));
         }
 
         let machine_identifier: Id = unsafe { msg_send![class!(VZMacMachineIdentifier), alloc] };
         let machine_identifier: Id = unsafe { msg_send![machine_identifier, initWithDataRepresentation:machine_identifier_data] };
         if machine_identifier == NIL {
-            panic!("Failed to create machine identifier");
+            return Err(String::from("Failed to create machine identifier"));
         }
         let _: () = unsafe { msg_send![platform_conf, setMachineIdentifier:machine_identifier] };
 
 
-        unsafe {VZMacPlatformConfiguration(StrongPtr::retain(platform_conf))}
+        Ok(unsafe {VZMacPlatformConfiguration(StrongPtr::retain(platform_conf))})
     }
 
     /// Create a new VZMacPlatformConfiguration based on the configuration requirements and saves
