@@ -113,8 +113,8 @@ impl NSURL {
 
     pub fn check_resource_is_reachable_and_return_error(&self) -> bool {
         let b = unsafe {
-            let obj: Id = msg_send![*self.0, checkResourceIsReachableAndReturnError: NIL];
-            obj as BOOL
+            let obj: BOOL = msg_send![*self.0, checkResourceIsReachableAndReturnError: NIL];
+            obj
         };
         b == YES
     }

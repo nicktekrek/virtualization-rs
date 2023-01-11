@@ -2,6 +2,7 @@
 
 use crate::{
     base::{Id, NSArray, NSError},
+    virtualization::mac_platform_configuration::VZMacPlatformConfiguration,
     virtualization::boot_loader::VZBootLoader,
     virtualization::entropy_device::VZEntropyDeviceConfiguration,
     virtualization::memory_device::VZMemoryBalloonDeviceConfiguration,
@@ -9,6 +10,7 @@ use crate::{
     virtualization::serial_port::VZSerialPortConfiguration,
     virtualization::socket_device::VZSocketDeviceConfiguration,
     virtualization::storage_device::VZStorageDeviceConfiguration,
+    virtualization::graphics_device::VZMacGraphicsDeviceConfiguration,
 };
 
 use block::Block;
@@ -39,6 +41,16 @@ impl VZVirtualMachineConfigurationBuilder {
         VZVirtualMachineConfigurationBuilder {
             conf: VZVirtualMachineConfiguration::new(),
         }
+    }
+
+    pub fn graphics_devices(mut self, graphics_device: Vec<VZMacGraphicsDeviceConfiguration>) -> Self {
+        self.conf.set_graphics_devices(graphics_device);
+        self
+    }
+
+    pub fn platform(mut self, platform: VZMacPlatformConfiguration) -> Self {
+        self.conf.set_platform(platform);
+        self
     }
 
     pub fn boot_loader<T: VZBootLoader>(mut self, boot_loader: T) -> Self {
@@ -117,6 +129,19 @@ impl VZVirtualMachineConfiguration {
         }
     }
 
+    fn set_graphics_devices(&mut self, conf: Vec<VZMacGraphicsDeviceConfiguration>) {
+        let array: NSArray<Id> = NSArray::array_with_objects(conf.into_iter().map(|value| *value.0).collect());
+        unsafe {
+            let _: () = msg_send![*self.0, setGraphicsDevices: array];
+        }
+    }
+
+    fn set_platform(&mut self, conf: VZMacPlatformConfiguration) {
+        unsafe {
+            let _: () = msg_send![*self.0, setPlatform: *conf.0];
+        }
+    }
+
     fn set_boot_loader<T: VZBootLoader>(&mut self, boot_loader: T) {
         unsafe {
             let _: () = msg_send![*self.0, setBootLoader: boot_loader.id()];
@@ -189,11 +214,11 @@ impl VZVirtualMachineConfiguration {
     pub fn validate_with_error(&self) -> Result<BOOL, NSError> {
         unsafe {
             let error = NSError(StrongPtr::new(0 as Id));
-            let obj: Id = msg_send![*self.0, validateWithError: &(*error.0)];
+            let obj: BOOL = msg_send![*self.0, validateWithError: &(*error.0)];
             if error.code() != 0 {
                 Err(error)
             } else {
-                Ok(obj as BOOL)
+                Ok(obj)
             }
         }
     }
@@ -201,7 +226,7 @@ impl VZVirtualMachineConfiguration {
 
 /// virtual machine
 #[derive(Clone)]
-pub struct VZVirtualMachine(StrongPtr);
+pub struct VZVirtualMachine(pub StrongPtr);
 
 /// state of virtual machine
 #[derive(Debug)]
@@ -252,7 +277,7 @@ impl VZVirtualMachine {
         if error.code() != 0 {
             Err(error)
         } else {
-            Ok(ret == 1i8)
+            Ok(ret == objc::runtime::YES)
         }
     }
 
