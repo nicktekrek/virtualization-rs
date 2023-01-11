@@ -62,7 +62,7 @@ fn download_new_macos_image(image_location: String) {
         let url_string: NSString = unsafe { NSString(StrongPtr::retain(msg_send![url, absoluteString])) };
         println!("URL IS: {}", url_string.as_str());
         println!("Downloading");
-        let bytes = reqwest::blocking::Client::builder().timeout(Some(std::time::Duration::from_secs(1200))).build().unwrap().get(url_string.as_str()).send().unwrap().bytes().unwrap();
+        let bytes = reqwest::blocking::Client::builder().timeout(Some(std::time::Duration::from_secs(45 * 60))).build().unwrap().get(url_string.as_str()).send().unwrap().bytes().unwrap();
         std::fs::write(&image_location, bytes).unwrap();
 
         println!("Image download complete");
