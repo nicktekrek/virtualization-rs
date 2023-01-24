@@ -3,6 +3,28 @@ use objc::{class, msg_send, sel, sel_impl};
 use crate::base::{NSError, Id, NIL, NSString, NSURL, NSArray};
 use block::{Block, ConcreteBlock};
 use std::sync::mpsc::channel;
+use crate::{
+    base::{dispatch_async, dispatch_queue_create, NSFileHandle},
+    virtualization::{
+        entropy_device::VZVirtioEntropyDeviceConfiguration,
+        graphics_device::VZMacGraphicsDeviceConfiguration,
+        mac_platform_configuration::VZMacPlatformConfiguration,
+        macos_boot_loader::VZMacOSBootLoader,
+        memory_device::VZVirtioTraditionalMemoryBalloonDeviceConfiguration,
+        network_device::{
+            VZMACAddress, VZNATNetworkDeviceAttachment, VZVirtioNetworkDeviceConfiguration,
+        },
+        serial_port::{
+            VZFileHandleSerialPortAttachmentBuilder, VZVirtioConsoleDeviceSerialPortConfiguration,
+        },
+        storage_device::{
+            VZDiskImageStorageDeviceAttachmentBuilder, VZVirtioBlockDeviceConfiguration,
+        },
+        virtual_machine::{VZVirtualMachine, VZVirtualMachineConfigurationBuilder, VZVirtualMachineConfiguration},
+    },
+};
+use std::path::PathBuf;
+use std::fs::canonicalize;
 
 pub struct VZMacOsConfigurationRequirements(pub StrongPtr);
 
@@ -12,7 +34,7 @@ pub struct VZMacOsConfigurationRequirements(pub StrongPtr);
 // TODO: Remove
 //const MEMORY_SIZE: u32 = 2147483648;
 
-pub fn install_macos_image(image_url: &str) -> VZMacOsConfigurationRequirements {
+pub fn install_macos_image(image_url: &'static str, cpu_count: usize, memory_size: usize, disks: Vec<PathBuf>, pixel_height: i32, pixel_width: i32, pixel_per_inch: i32, auxiliary_storage_url: &str, hardware_model_url: &str, machine_identifier_url: &str) {
     // Download image if there is none
     if !std::path::Path::new(image_url).exists() {
         download_new_macos_image(image_url.to_string());
@@ -20,7 +42,124 @@ pub fn install_macos_image(image_url: &str) -> VZMacOsConfigurationRequirements 
         println!("Skipping download because file already exists");
     }
 
-    load_configuration_requirements_from_disk(image_url)
+    let config = load_configuration_requirements_from_disk(image_url);
+    let platform = VZMacPlatformConfiguration::create(config, auxiliary_storage_url, hardware_model_url, machine_identifier_url);
+
+    // FIXME: Three differences from apple code. They use the main thread for doing all of this, they use
+    // a "delegate" and they do the setup_virtual_machine_with_mac_os_configuration_requirements on
+    // the main thread. This shouldn't matter but they also create the platform inside of
+    // setup_virtual_machine_with_mac_os_configuration_requirements so we can do that too in order
+    // to get around borrow issue
+    let label = std::ffi::CString::new("second").unwrap();
+    let queue = unsafe { dispatch_queue_create(label.as_ptr(), NIL) };
+
+    let vm = setup_virtual_machine_with_mac_os_configuration_requirements(cpu_count, memory_size, disks, platform, pixel_height, pixel_width, pixel_per_inch, queue);
+    let dispatch_block = ConcreteBlock::new(move || {
+        start_installation_with_restore_image_file_url(&vm, image_url);
+    });
+    let dispatch_block = dispatch_block.copy();
+    let dispatch_block: &Block<(), ()> = &dispatch_block;
+    unsafe {dispatch_async(queue, dispatch_block) }
+}
+
+fn start_installation_with_restore_image_file_url(vm: &VZVirtualMachine, restore_image_file_url: &str) {
+    println!("{}", restore_image_file_url);
+    let restore_image_url = NSURL::file_url_with_path(restore_image_file_url, false);
+    let macos_installer: Id = unsafe { msg_send![class!(VZMacOSInstaller), alloc] };
+    // This must run on the VMs queue
+    let macos_installer: Id = unsafe { msg_send![macos_installer, initWithVirtualMachine:*vm.0 restoreImageURL:*restore_image_url.0] };
+
+    println!("lol");
+    //let (install_macos_sender, install_macos_listener) = channel();
+    let install_macos_block = ConcreteBlock::new(move |err: Id| {
+        println!("Callback");
+        if err != NIL {
+            let error = unsafe { NSError(StrongPtr::retain(err)) };
+            error.dump();
+            panic!("Installation of macOS failed");
+        } else {
+            println!("Succeeded in installing macos");
+        }
+        //install_macos_sender.send(()).unwrap();
+    });
+    let install_macos_block = install_macos_block.copy();
+    let install_macos_block: &Block<(Id,), ()> = &install_macos_block;
+    println!("Installing while the VM is in the {:?} state", unsafe { vm.state() });
+    let _: Id = unsafe { msg_send![macos_installer, installWithCompletionHandler:install_macos_block] };
+    loop {
+        let progress: Id = unsafe {msg_send![macos_installer, progress]};
+        let total: i64 = unsafe { msg_send![progress, totalUnitCount] };
+        let completed: i64 = unsafe { msg_send![progress, totalUnitCount] };
+        println!("Fraction: {}, Completed: {}, Total: {}", completed/total, completed, total);
+        println!("Current VM state is {:?}", unsafe { vm.state() });
+        println!("Sleeping..");
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+}
+
+fn setup_virtual_machine_with_mac_os_configuration_requirements(cpu_count: usize, memory_size: usize, disks: Vec<PathBuf>, platform: VZMacPlatformConfiguration, pixel_height: i32, pixel_width: i32, pixel_per_inch: i32, queue: Id) -> VZVirtualMachine {
+    let boot_loader = VZMacOSBootLoader::new();
+    let file_handle_for_reading = NSFileHandle::file_handle_with_standard_input();
+    let file_handle_for_writing = NSFileHandle::file_handle_with_standard_output();
+    let attachement = VZFileHandleSerialPortAttachmentBuilder::new()
+        .file_handle_for_reading(file_handle_for_reading)
+        .file_handle_for_writing(file_handle_for_writing)
+        .build();
+    let serial = VZVirtioConsoleDeviceSerialPortConfiguration::new(attachement);
+    let entropy = VZVirtioEntropyDeviceConfiguration::new();
+    let memory_balloon = VZVirtioTraditionalMemoryBalloonDeviceConfiguration::new();
+
+    let mut block_devices = Vec::with_capacity(disks.len());
+    for disk in &disks {
+        let block_attachment = match VZDiskImageStorageDeviceAttachmentBuilder::new()
+            .path(
+                canonicalize(disk)
+                    .unwrap()
+                    .into_os_string()
+                    .into_string()
+                    .unwrap(),
+            )
+            .read_only(false)
+            .build()
+        {
+            Ok(x) => x,
+            Err(err) => {
+                err.dump();
+                // TODO: Fix
+                panic!();
+            }
+        };
+        let block_device = VZVirtioBlockDeviceConfiguration::new(block_attachment);
+        block_devices.push(block_device);
+    }
+
+    let network_attachment = VZNATNetworkDeviceAttachment::new();
+    let mut network_device = VZVirtioNetworkDeviceConfiguration::new(network_attachment);
+    network_device.set_mac_address(VZMACAddress::random_locally_administered_address());
+
+    let conf = VZVirtualMachineConfigurationBuilder::new()
+        .graphics_devices(vec![VZMacGraphicsDeviceConfiguration::new(
+            pixel_width,
+            pixel_height,
+            pixel_per_inch,
+        )])
+        .boot_loader(boot_loader)
+        .cpu_count(cpu_count)
+        .memory_size(memory_size)
+        .entropy_devices(vec![entropy])
+        .memory_balloon_devices(vec![memory_balloon])
+        .network_devices(vec![network_device])
+        .serial_ports(vec![serial])
+        .storage_devices(block_devices)
+        .platform(platform)
+        .build();
+
+    if conf.validate_with_error().is_err() {
+        unimplemented!();
+    }
+
+    // TODO: the macos SC uses VMDelegate here, what is that and do we need it?
+    VZVirtualMachine::new(conf, queue)
 }
 
 fn load_configuration_requirements_from_disk(image_path: &str) -> VZMacOsConfigurationRequirements {
@@ -37,7 +176,7 @@ fn load_configuration_requirements_from_disk(image_path: &str) -> VZMacOsConfigu
 
         if *macos_configuration_requirements.0 == NIL || !supported {
             // TODO: Abort installation
-            println!("No supported Mac configuration");
+            panic!("No supported Mac configuration");
         }
         loaded_image_sender.send(macos_configuration_requirements).unwrap();
     });

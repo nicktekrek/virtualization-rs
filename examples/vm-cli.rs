@@ -1,4 +1,5 @@
 use block::{Block, ConcreteBlock};
+use std::sync::mpsc::channel;
 use libc::sleep;
 use objc::rc::StrongPtr;
 use objc::{class, msg_send, sel, sel_impl};
@@ -6,7 +7,7 @@ use std::fs::canonicalize;
 use std::sync::{Arc, RwLock};
 use virtualization_rs::virtualization::image_installer::install_macos_image;
 use virtualization_rs::{
-    base::{dispatch_async, dispatch_queue_create, Id, NSError, NSFileHandle, NSString, NIL},
+    base::{dispatch_async, dispatch_queue_create, Id, NSError, NSFileHandle, NSURL, NIL},
     virtualization::{
         entropy_device::VZVirtioEntropyDeviceConfiguration,
         graphics_device::VZMacGraphicsDeviceConfiguration,
@@ -137,122 +138,74 @@ fn main() {
         return;
     }
 
-    // Install macos image if there is no image installed
-    let platform = match VZMacPlatformConfiguration::load(
-        AUXILIARY_STORAGE_URL,
-        HARDWARE_MODEL_STORAGE_URL,
-        MACHINE_IDENTIFIER_STORAGE_URL,
-    ) {
-        Ok(platform) => platform,
-        Err(_) => {
-            let conf_req = install_macos_image(IMAGE_LOCATION);
-            VZMacPlatformConfiguration::create(conf_req, AUXILIARY_STORAGE_URL, HARDWARE_MODEL_STORAGE_URL, MACHINE_IDENTIFIER_STORAGE_URL)
-        }
-    };
+    // TODO: If we need to install macos then install it
+    let vm = install_macos_image(IMAGE_LOCATION, cpu_count, memory_size, disks, PIXEL_HEIGHT, PIXEL_WIDTH, PIXEL_PER_INCH, AUXILIARY_STORAGE_URL, HARDWARE_MODEL_STORAGE_URL, MACHINE_IDENTIFIER_STORAGE_URL);
 
-    let boot_loader = VZMacOSBootLoader::new();
-    let file_handle_for_reading = NSFileHandle::file_handle_with_standard_input();
-    let file_handle_for_writing = NSFileHandle::file_handle_with_standard_output();
-    let attachement = VZFileHandleSerialPortAttachmentBuilder::new()
-        .file_handle_for_reading(file_handle_for_reading)
-        .file_handle_for_writing(file_handle_for_writing)
-        .build();
-    let serial = VZVirtioConsoleDeviceSerialPortConfiguration::new(attachement);
-    let entropy = VZVirtioEntropyDeviceConfiguration::new();
-    let memory_balloon = VZVirtioTraditionalMemoryBalloonDeviceConfiguration::new();
+    //let vm_view: Id = unsafe { msg_send![class!(VZVirtualMachineView), new] };
+    //let _: () = unsafe { msg_send![vm_view, setVirtualMachine:*vm.0] };
 
-    let mut block_devices = Vec::with_capacity(disks.len());
-    for disk in &disks {
-        let block_attachment = match VZDiskImageStorageDeviceAttachmentBuilder::new()
-            .path(
-                canonicalize(disk)
-                    .unwrap()
-                    .into_os_string()
-                    .into_string()
-                    .unwrap(),
-            )
-            .read_only(false)
-            .build()
-        {
-            Ok(x) => x,
-            Err(err) => {
-                err.dump();
-                return;
-            }
-        };
-        let block_device = VZVirtioBlockDeviceConfiguration::new(block_attachment);
-        block_devices.push(block_device);
-    }
+    //let vm = Arc::new(RwLock::new(vm));
 
-    let network_attachment = VZNATNetworkDeviceAttachment::new();
-    let mut network_device = VZVirtioNetworkDeviceConfiguration::new(network_attachment);
-    network_device.set_mac_address(VZMACAddress::random_locally_administered_address());
+    //let (s, l) = channel();
+    //let dispatch_block = ConcreteBlock::new(move || {
+    //    let mut vm = vm.write().unwrap();
+    //    // Install macOS
+    //    let restore_image_url = NSURL::file_url_with_path(IMAGE_LOCATION, false);
+    //    let macos_installer: Id = unsafe { msg_send![class!(VZMacOSInstaller), alloc] };
+    //    let macos_installer: Id = unsafe { msg_send![macos_installer, initWithVirtualMachine:*vm.0 restoreImageURL:*restore_image_url.0] };
 
-    let conf = VZVirtualMachineConfigurationBuilder::new()
-        .graphics_devices(vec![VZMacGraphicsDeviceConfiguration::new(
-            PIXEL_HEIGHT,
-            PIXEL_WIDTH,
-            PIXEL_PER_INCH,
-        )])
-        .boot_loader(boot_loader)
-        .cpu_count(cpu_count)
-        .memory_size(memory_size)
-        .entropy_devices(vec![entropy])
-        .memory_balloon_devices(vec![memory_balloon])
-        .network_devices(vec![network_device])
-        .serial_ports(vec![serial])
-        .storage_devices(block_devices)
-        .platform(platform)
-        .build();
+    //    //let (install_macos_sender, install_macos_listener) = channel();
+    //    let install_macos_block = ConcreteBlock::new(move |err: Id| {
+    //        println!("Callback");
+    //        if err != NIL {
+    //            let error = unsafe { NSError(StrongPtr::retain(err)) };
+    //            error.dump();
+    //            panic!("Installation of macOS failed");
+    //        } else {
+    //            println!("Succeeded in installing macos");
+    //        }
+    //        //install_macos_sender.send(()).unwrap();
+    //    });
+    //    let install_macos_block = install_macos_block.copy();
+    //    let install_macos_block: &Block<(Id,), ()> = &install_macos_block;
 
-    match conf.validate_with_error() {
-        Ok(_) => {
-            let label = std::ffi::CString::new("second").unwrap();
-            let queue = unsafe { dispatch_queue_create(label.as_ptr(), NIL) };
-            let vm = VZVirtualMachine::new(conf, queue);
+    //    println!("Installing while the VM is in the {:?} state", unsafe { vm.state() });
+    //    let _: Id = unsafe { msg_send![macos_installer, installWithCompletionHandler:install_macos_block] };
+    //    let progress: Id = unsafe {msg_send![macos_installer, progress]};
+    //    s.send(progress).unwrap();
+    //    println!("Doing nothing on this queue after this");
+    //    //install_macos_listener.recv().unwrap();
+    //    //println!("Installation recieved");
 
-            let vm_view: Id = unsafe { msg_send![class!(VZVirtualMachineView), new] };
-            let _: () = unsafe { msg_send![vm_view, setVirtualMachine:*vm.0] };
-            let vm = Arc::new(RwLock::new(vm));
+    //    //let completion_handler = ConcreteBlock::new(|err: Id| {
+    //    //    println!("Completion handler completed..");
+    //    //    if err != NIL {
+    //    //        let error = unsafe { NSError(StrongPtr::retain(err)) };
+    //    //        error.dump();
+    //    //    }
+    //    //});
+    //    //let completion_handler = completion_handler.copy();
+    //    //let completion_handler: &Block<(Id,), ()> = &completion_handler;
 
+    //    //vm.start_with_completion_handler(completion_handler);
 
-            let dispatch_block = ConcreteBlock::new(move || {
-                let completion_handler = ConcreteBlock::new(|err: Id| {
-                    println!("Completion handler completed..");
-                    if err != NIL {
-                        let error = unsafe { NSError(StrongPtr::retain(err)) };
-                        error.dump();
-                    }
-                });
-                let completion_handler = completion_handler.copy();
-                let completion_handler: &Block<(Id,), ()> = &completion_handler;
+    //});
+    //let dispatch_block = dispatch_block.copy();
+    //let dispatch_block: &Block<(), ()> = &dispatch_block;
 
-                vm.write()
-                    .unwrap()
-                    .start_with_completion_handler(completion_handler);
-            });
-            let dispatch_block = dispatch_block.copy();
-            let dispatch_block: &Block<(), ()> = &dispatch_block;
+    ////unsafe {
+    ////    println!("dispatching..");
+    ////    dispatch_async(queue, dispatch_block);
+    ////    println!("dispatched");
+    ////}
+    //let progress = l.recv().unwrap();
 
+    ////attach_vm_view_to_window(app, window, vm_view);
 
-            unsafe {
-                println!("dispatching..");
-                dispatch_async(queue, dispatch_block);
-                println!("dispatched");
-            }
-
-            attach_vm_view_to_window(app, window, vm_view);
-
-            loop {
-                unsafe {
-                    println!("Sleeping..");
-                    sleep(100);
-                }
-            }
-        }
-        Err(e) => {
-            e.dump();
-            return;
+    loop {
+        unsafe {
+            println!("Sleeping..");
+            sleep(10);
         }
     }
 }

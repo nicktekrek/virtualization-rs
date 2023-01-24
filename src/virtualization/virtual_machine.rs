@@ -265,6 +265,14 @@ impl VZVirtualMachine {
         }
     }
 
+    pub fn new_without_queue(conf: VZVirtualMachineConfiguration) -> VZVirtualMachine {
+        unsafe {
+            let i: Id = msg_send![class!(VZVirtualMachine), alloc];
+            let p = StrongPtr::new(msg_send![i, initWithConfiguration:*conf.0]);
+            VZVirtualMachine(p)
+        }
+    }
+
     pub fn start_with_completion_handler(&mut self, completion_handler: &Block<(Id,), ()>) {
         unsafe {
             let _: Id = msg_send![*self.0, startWithCompletionHandler: completion_handler];

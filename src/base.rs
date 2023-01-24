@@ -12,6 +12,12 @@ use objc::{class, msg_send, sel, sel_impl};
 #[link(name = "Virtualization", kind = "framework")]
 extern "C" {}
 
+//#[link(name = "Dispatch", kind = "framework")]
+//extern "C" {
+//    pub fn dispatch_get_main_queue() -> Id;
+//    pub fn dispatch_main() -> Id;
+//}
+
 #[link(name = "Foundation", kind = "framework")]
 extern "C" {
     pub fn dispatch_queue_create(label: *const libc::c_char, attr: Id) -> Id;
